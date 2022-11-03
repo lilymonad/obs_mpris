@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use handlebars::Handlebars;
 use mpris::PlayerFinder;
 use obs_sys::{obs_enum_sources, obs_get_source_by_name, obs_source_t};
 use obs_wrapper::{
@@ -22,6 +23,7 @@ use obs_wrapper::{
     },
     string::ObsString,
 };
+use serde::Serialize;
 
 /// The module loaded by OBS
 struct MprisModule {
@@ -38,20 +40,34 @@ struct MprisSource {
     next_update: f32,
 }
 
+#[derive(Serialize)]
+struct TrackMetadata {
+    title: Option<String>,
+    album: Option<String>,
+    artists: Option<Vec<String>>,
+}
+
 /// Global static context of the plugin
-struct ThreadCtx {
+struct GlobalCtx {
     /// The player we want to monitor
     mpris_player: Mutex<Option<ObsString>>,
     /// The track id (for now it's the title, but it should be the whole metadata)
-    track_id: Mutex<Option<String>>,
+    track_metadata: Mutex<TrackMetadata>,
+    /// The template engine
+    template_engine: Mutex<Handlebars<'static>>,
     running: AtomicBool,
 }
 
 /// Wrap the contxt into a LazyLock to create it dynamically (we cannot do differently because the
 /// structure uses Mutex
-static THREAD_CTX: LazyLock<ThreadCtx> = LazyLock::new(|| ThreadCtx {
+static GLOBAL_CTX: LazyLock<GlobalCtx> = LazyLock::new(|| GlobalCtx {
+    template_engine: Mutex::new(Handlebars::new()),
     mpris_player: Mutex::new(None),
-    track_id: Mutex::new(None),
+    track_metadata: Mutex::new(TrackMetadata {
+        title: None,
+        album: None,
+        artists: None,
+    }),
     running: AtomicBool::from(true),
 });
 
@@ -66,7 +82,20 @@ impl Sourceable for MprisSource {
     }
 
     fn create(create: &mut CreatableSourceContext<Self>, _context: SourceContext) -> Self {
-        *THREAD_CTX.mpris_player.lock().unwrap() = create.settings.get("mpris_device");
+        *GLOBAL_CTX.mpris_player.lock().unwrap() = create.settings.get("mpris_device");
+        let _ = GLOBAL_CTX
+            .template_engine
+            .lock()
+            .unwrap()
+            .register_template_string(
+                "template",
+                create
+                    .settings
+                    .get::<ObsString>("template")
+                    .as_ref()
+                    .map(ObsString::as_str)
+                    .unwrap_or(""),
+            );
         Self {
             text_source: create.settings.get("text_source"),
             next_update: 0.0,
@@ -127,15 +156,16 @@ impl VideoTickSource for MprisSource {
                 unsafe { SourceContext::from_raw(obs_get_source_by_name(source_name.as_ptr())) };
 
             // get the player metadata from global context
-            let lock = THREAD_CTX.track_id.lock().unwrap();
-            let default = "Unknown".to_owned();
-            let text = lock.as_ref().unwrap_or(&default);
+            let text = GLOBAL_CTX
+                .template_engine
+                .lock()
+                .unwrap()
+                .render("template", &*GLOBAL_CTX.track_metadata.lock().unwrap())
+                .unwrap_or_else(|e| e.to_string());
 
             // set the text
-            // TODO: use serde_json to create the json data because it will fail if we have a song
-            // name with \" in it
             source.update_source_settings(
-                &mut DataObj::from_json(format!("{{ \"text\": \"{text}\" }}",)).unwrap(),
+                &mut DataObj::from_json(serde_json::json!({ "text": text }).to_string()).unwrap(),
             );
         }
 
@@ -155,7 +185,20 @@ impl UpdateSource for MprisSource {
             self.text_source = Some(src_name);
         }
 
-        *THREAD_CTX.mpris_player.lock().unwrap() = settings.get("mpris_device");
+        let _ = GLOBAL_CTX
+            .template_engine
+            .lock()
+            .unwrap()
+            .register_template_string(
+                "template",
+                settings
+                    .get::<ObsString>("template")
+                    .as_ref()
+                    .map(ObsString::as_str)
+                    .unwrap_or(""),
+            );
+
+        *GLOBAL_CTX.mpris_player.lock().unwrap() = settings.get("mpris_device");
     }
 }
 
@@ -193,6 +236,12 @@ impl GetPropertiesSource for MprisSource {
             TextProp::new(TextType::Default),
         );
 
+        props.add(
+            obs_string!("template"),
+            obs_string!("The text template to show. Use {variable} to show a variable."),
+            TextProp::new(TextType::Multiline),
+        );
+
         props
     }
 }
@@ -217,15 +266,20 @@ impl Module for MprisModule {
             let mpris_player_finder = PlayerFinder::new().unwrap();
             let mut current_player = None;
 
-            while THREAD_CTX.running.load(Ordering::Relaxed) {
-                let mpris_player = THREAD_CTX.mpris_player.lock().unwrap().take();
+            while GLOBAL_CTX.running.load(Ordering::Relaxed) {
+                let mpris_player = GLOBAL_CTX.mpris_player.lock().unwrap().take();
 
                 if let Some(player) = mpris_player {
-                    let players = mpris_player_finder.find_all().unwrap();
+                    let players = match mpris_player_finder.find_all() {
+                        Ok(players) => players,
+                        Err(e) => {
+                            log::error!("Failed to get MPRIS player list {e}");
+                            continue;
+                        }
+                    };
                     for p in players {
                         let name = p.identity();
                         if name == player.as_str() {
-                            log::info!("monitoring player {name}");
                             current_player = Some(p);
                             break;
                         }
@@ -233,9 +287,12 @@ impl Module for MprisModule {
                 }
 
                 if let Some(meta) = current_player.as_ref().and_then(|p| p.get_metadata().ok()) {
-                    let song_name = meta.title().unwrap_or("Unknown");
-                    log::info!("song name is {song_name}");
-                    *THREAD_CTX.track_id.lock().unwrap() = Some(song_name.to_string());
+                    {
+                        let mut metadata = GLOBAL_CTX.track_metadata.lock().unwrap();
+                        metadata.title = meta.title().map(Into::into);
+                        metadata.album = meta.album_name().map(Into::into);
+                        metadata.artists = meta.artists().cloned();
+                    }
 
                     thread::sleep(Duration::from_secs(5));
                 }
@@ -269,7 +326,7 @@ impl Module for MprisModule {
     }
 
     fn unload(&mut self) {
-        THREAD_CTX.running.store(false, Ordering::Relaxed);
+        GLOBAL_CTX.running.store(false, Ordering::Relaxed);
         let _ = self.mpris_thread.take().unwrap().join();
     }
 }
