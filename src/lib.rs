@@ -23,28 +23,39 @@ use obs_wrapper::{
     string::ObsString,
 };
 
+/// The module loaded by OBS
 struct MprisModule {
     context: ModuleContext,
+    /// The thread launched when the module is loaded.
+    /// We need it to make MPRIS calls non-blocking
     mpris_thread: Option<JoinHandle<()>>,
 }
 
+/// A source you'll need to add to your scene
+/// in order to command the thread and write something on it
 struct MprisSource {
     text_source: Option<ObsString>,
     next_update: f32,
 }
 
+/// Global static context of the plugin
 struct ThreadCtx {
+    /// The player we want to monitor
     mpris_player: Mutex<Option<ObsString>>,
+    /// The track id (for now it's the title, but it should be the whole metadata)
     track_id: Mutex<Option<String>>,
     running: AtomicBool,
 }
 
+/// Wrap the contxt into a LazyLock to create it dynamically (we cannot do differently because the
+/// structure uses Mutex
 static THREAD_CTX: LazyLock<ThreadCtx> = LazyLock::new(|| ThreadCtx {
     mpris_player: Mutex::new(None),
     track_id: Mutex::new(None),
     running: AtomicBool::from(true),
 });
 
+/// Implement Sourceable which allow us to register MprisSource as an OBS source
 impl Sourceable for MprisSource {
     fn get_id() -> ObsString {
         obs_string!("obs_mpris")
@@ -69,7 +80,9 @@ impl GetNameSource for MprisSource {
     }
 }
 
-// si un jour j'ai envie d'ajouter du graphisme
+// if one day i want to add a graphical feature like showing the album i'll need to implement those
+// traits
+//
 //impl GetWidthSource for MprisSource {
 //    fn get_width(&mut self) -> u32 {
 //        self.width
@@ -96,30 +109,42 @@ impl GetNameSource for MprisSource {
 //    }
 //}
 
+/// We implement VideoTickSource to update shown information periodicaly
 impl VideoTickSource for MprisSource {
     fn video_tick(&mut self, seconds: f32) {
+        // update the next_update deadline counter
+        // and make an update when asked
         self.next_update -= seconds;
         if self.next_update > 0.0 {
             return;
         }
 
+        // update text source text
         if let Some(source_name) = self.text_source.as_ref() {
+            // SAFETY: it's ok because we always get the SourceContext pointer from obs dedicated
+            // function
             let mut source =
                 unsafe { SourceContext::from_raw(obs_get_source_by_name(source_name.as_ptr())) };
 
+            // get the player metadata from global context
             let lock = THREAD_CTX.track_id.lock().unwrap();
             let default = "Unknown".to_owned();
             let text = lock.as_ref().unwrap_or(&default);
 
+            // set the text
+            // TODO: use serde_json to create the json data because it will fail if we have a song
+            // name with \" in it
             source.update_source_settings(
                 &mut DataObj::from_json(format!("{{ \"text\": \"{text}\" }}",)).unwrap(),
             );
         }
 
+        // reset update timer
         self.next_update = 1.0;
     }
 }
 
+/// Implementation of update callback (called when user changed source properties)
 impl UpdateSource for MprisSource {
     fn update(
         &mut self,
@@ -134,6 +159,8 @@ impl UpdateSource for MprisSource {
     }
 }
 
+/// Helper function to fill a ListProp (represented by the data parameter) from an obs_source_t
+/// given by the funtion "obs_enum_sources"
 unsafe extern "C" fn fill_property_list(data: *mut c_void, src: *mut obs_source_t) -> bool {
     let src = SourceContext::from_raw(src);
     let list = (data as *mut ListProp<ObsString>).as_mut().unwrap();
@@ -142,6 +169,8 @@ unsafe extern "C" fn fill_property_list(data: *mut c_void, src: *mut obs_source_
     true
 }
 
+/// Setup the property list of the source (what the user can edit when changing the source
+/// properties)
 impl GetPropertiesSource for MprisSource {
     fn get_properties(&mut self) -> obs_wrapper::properties::Properties {
         let mut props = Properties::new();
@@ -168,6 +197,7 @@ impl GetPropertiesSource for MprisSource {
     }
 }
 
+/// Implementing Module allow us to register MprisModule as an OBS module
 impl Module for MprisModule {
     fn new(context: ModuleContext) -> Self {
         Self {
@@ -244,4 +274,5 @@ impl Module for MprisModule {
     }
 }
 
+// register MprisModule (setup the functions like obs_module_load for obs to understand the plugin)
 obs_register_module!(MprisModule);
