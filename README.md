@@ -15,4 +15,3 @@ Create a Text source and a MPRIS source on your scene. Then setup the MPRIS sour
 # TODO
 
 - Give the list of MPRIS players instead of letting the user type anything in the player property field
-- Use all metadata instead of only song title + allow user to give a text template
