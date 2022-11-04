@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use handlebars::Handlebars;
+use handlebars::{no_escape, Handlebars};
 use mpris::PlayerFinder;
 use obs_sys::{obs_enum_sources, obs_get_source_by_name, obs_source_t};
 use obs_wrapper::{
@@ -48,27 +48,31 @@ struct TrackMetadata {
 }
 
 /// Global static context of the plugin
-struct GlobalCtx {
+struct GlobalCtx<'a> {
     /// The player we want to monitor
     mpris_player: Mutex<Option<ObsString>>,
     /// The track id (for now it's the title, but it should be the whole metadata)
     track_metadata: Mutex<TrackMetadata>,
     /// The template engine
-    template_engine: Mutex<Handlebars<'static>>,
+    template_engine: Mutex<Handlebars<'a>>,
     running: AtomicBool,
 }
 
 /// Wrap the contxt into a LazyLock to create it dynamically (we cannot do differently because the
 /// structure uses Mutex
-static GLOBAL_CTX: LazyLock<GlobalCtx> = LazyLock::new(|| GlobalCtx {
-    template_engine: Mutex::new(Handlebars::new()),
-    mpris_player: Mutex::new(None),
-    track_metadata: Mutex::new(TrackMetadata {
-        title: None,
-        album: None,
-        artists: None,
-    }),
-    running: AtomicBool::from(true),
+static GLOBAL_CTX: LazyLock<GlobalCtx<'static>> = LazyLock::new(|| {
+    let mut template_engine = Handlebars::new();
+    template_engine.register_escape_fn(no_escape);
+    GlobalCtx {
+        template_engine: Mutex::new(template_engine),
+        mpris_player: Mutex::new(None),
+        track_metadata: Mutex::new(TrackMetadata {
+            title: None,
+            album: None,
+            artists: None,
+        }),
+        running: AtomicBool::from(true),
+    }
 });
 
 /// Implement Sourceable which allow us to register MprisSource as an OBS source
@@ -238,7 +242,12 @@ impl GetPropertiesSource for MprisSource {
 
         props.add(
             obs_string!("template"),
-            obs_string!("The text template to show. Use {variable} to show a variable."),
+            obs_string!(
+                "The text template to show.\n\
+                Use {{variable}} to show a variable.\n\
+                Available variables are:\n\
+                {{title}}, {{album}}, {{artists}}"
+            ),
             TextProp::new(TextType::Multiline),
         );
 
