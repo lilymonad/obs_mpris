@@ -156,8 +156,13 @@ impl VideoTickSource for MprisSource {
         if let Some(source_name) = self.text_source.as_ref() {
             // SAFETY: it's ok because we always get the SourceContext pointer from obs dedicated
             // function
-            let mut source =
-                unsafe { SourceContext::from_raw(obs_get_source_by_name(source_name.as_ptr())) };
+            let mut source = unsafe {
+                let ptr = obs_get_source_by_name(source_name.as_ptr());
+                if ptr.is_null() {
+                    return;
+                }
+                SourceContext::from_raw(ptr)
+            };
 
             // get the player metadata from global context
             let text = GLOBAL_CTX
@@ -206,16 +211,6 @@ impl UpdateSource for MprisSource {
     }
 }
 
-/// Helper function to fill a ListProp (represented by the data parameter) from an obs_source_t
-/// given by the funtion "obs_enum_sources"
-unsafe extern "C" fn fill_property_list(data: *mut c_void, src: *mut obs_source_t) -> bool {
-    let src = SourceContext::from_raw(src);
-    let list = (data as *mut ListProp<ObsString>).as_mut().unwrap();
-    let name: ObsString = src.name().unwrap().into();
-    list.push(name.clone(), name);
-    true
-}
-
 /// Setup the property list of the source (what the user can edit when changing the source
 /// properties)
 impl GetPropertiesSource for MprisSource {
@@ -227,6 +222,18 @@ impl GetPropertiesSource for MprisSource {
             false,
         );
 
+        // Helper function to fill a ListProp (represented by the data parameter) from an obs_source_t
+        // given by the funtion "obs_enum_sources"
+        unsafe extern "C" fn fill_property_list(data: *mut c_void, src: *mut obs_source_t) -> bool {
+            let src = SourceContext::from_raw(src);
+            let list = (data as *mut ListProp<ObsString>).as_mut().unwrap();
+            let name: ObsString = src.name().unwrap().into();
+            list.push(name.clone(), name);
+            true
+        }
+
+        // SAFETY: this is safe because list has the good type (the callback casts it back to a
+        // ListProp<ObsString>) and outlives this call
         unsafe {
             obs_enum_sources(
                 Some(fill_property_list),
