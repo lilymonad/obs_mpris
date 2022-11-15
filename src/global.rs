@@ -1,7 +1,7 @@
 use handlebars::{no_escape, Handlebars};
 use obs_wrapper::prelude::ObsString;
 use serde::Serialize;
-use std::sync::{atomic::AtomicBool, LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex};
 
 #[derive(Serialize)]
 pub(crate) struct TrackMetadata {
@@ -18,7 +18,6 @@ pub struct GlobalCtx<'a> {
     pub(crate) track_metadata: Mutex<TrackMetadata>,
     /// The template engine
     pub(crate) template_engine: Mutex<Handlebars<'a>>,
-    pub(crate) running: AtomicBool,
 }
 
 /// Wrap the contxt into a LazyLock to create it dynamically (we cannot do differently because the
@@ -34,6 +33,5 @@ pub static GLOBAL_CTX: LazyLock<GlobalCtx<'static>> = LazyLock::new(|| {
             album: None,
             artists: None,
         }),
-        running: AtomicBool::from(true),
     }
 });
