@@ -8,8 +8,7 @@ use obs_wrapper::{
     string::ObsString,
 };
 
-pub fn mpris_info_source_properties() -> Properties {
-    let mut props = Properties::new();
+pub fn add_list_of_text_props(props: &mut Properties) {
     let mut list = props.add_list(
         obs_string!("text_source"),
         obs_string!("The text source to write to"),
@@ -34,7 +33,9 @@ pub fn mpris_info_source_properties() -> Properties {
             (&mut list) as *mut ListProp<ObsString> as *mut c_void,
         );
     }
+}
 
+pub fn add_common_properties(props: &mut Properties) {
     props.add(
         obs_string!("mpris_device"),
         obs_string!("The MPRIS player to monitor"),
@@ -51,5 +52,4 @@ pub fn mpris_info_source_properties() -> Properties {
         ),
         TextProp::new(TextType::Multiline),
     );
-    props
 }
