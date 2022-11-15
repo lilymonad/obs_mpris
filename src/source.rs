@@ -1,5 +1,5 @@
 use crate::{
-    global::GLOBAL_CTX,
+    global::{self, TrackMetadata},
     properties::{add_common_properties, add_list_of_text_props},
 };
 use obs_sys::obs_get_source_by_name;
@@ -19,6 +19,7 @@ use obs_wrapper::{
 pub struct MprisSource {
     context: SourceContext,
     text_source: Option<SourceContext>,
+    traced_player_id: String,
     next_update: f32,
 }
 
@@ -37,7 +38,7 @@ impl MprisSource {
             })
         };
 
-        let _ = GLOBAL_CTX
+        let _ = global::get()
             .template_engine
             .lock()
             .unwrap()
@@ -49,7 +50,10 @@ impl MprisSource {
                     .unwrap_or(""),
             );
 
-        *GLOBAL_CTX.mpris_player.lock().unwrap() = data.get("mpris_device");
+        self.traced_player_id = data
+            .get::<ObsString>("mpris_device")
+            .map(|s| s.as_str().to_string())
+            .unwrap_or_default();
     }
 }
 
@@ -65,6 +69,7 @@ impl Sourceable for MprisSource {
 
     fn create(create: &mut CreatableSourceContext<Self>, context: SourceContext) -> Self {
         let mut ret = MprisSource {
+            traced_player_id: "".to_string(),
             context,
             text_source: None,
             next_update: 0.0,
@@ -119,16 +124,23 @@ impl VideoTickSource for MprisSource {
             return;
         }
 
+        let default_env = TrackMetadata::default();
         // update text source text
         if let Some(source) = self.text_source.as_mut() {
             // get the player metadata from global context
-            let text = GLOBAL_CTX
+            let text = global::get()
                 .template_engine
                 .lock()
                 .unwrap()
                 .render(
                     self.context.name().unwrap(),
-                    &*GLOBAL_CTX.track_metadata.lock().unwrap(),
+                    global::get()
+                        .track_metadata
+                        .lock()
+                        .ok()
+                        .as_ref()
+                        .and_then(|lock| lock.get(&self.traced_player_id))
+                        .unwrap_or(&default_env),
                 )
                 .unwrap_or_else(|e| e.to_string());
 

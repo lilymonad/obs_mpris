@@ -1,12 +1,13 @@
-#![feature(once_cell, thread_spawn_unchecked)]
+#![feature(once_cell, thread_spawn_unchecked, exclusive_wrapper)]
 use std::{
+    collections::HashMap,
     sync::atomic::{AtomicBool, Ordering},
     thread::{self, JoinHandle},
     time::Duration,
 };
 
 use filter::MprisTextFilter;
-use global::GLOBAL_CTX;
+use global::TrackMetadata;
 use mpris::PlayerFinder;
 use obs_wrapper::{
     log::Logger,
@@ -51,38 +52,39 @@ impl Module for MprisModule {
         let mpris_thread = unsafe {
             thread::Builder::new().spawn_unchecked(|| {
                 let mpris_player_finder = PlayerFinder::new().unwrap();
-                let mut current_player = None;
+                let mut player_set = HashMap::new();
 
                 while self.thread_running.load(Ordering::Relaxed) {
-                    let mpris_player = GLOBAL_CTX.mpris_player.lock().unwrap().take();
+                    // get player list from dbus
+                    let Ok(players) = mpris_player_finder.find_all() else {
+                        log::error!("Failed to get MPRIS player list");
+                        thread::sleep(Duration::from_secs(5));
+                        continue;
+                    };
 
-                    if let Some(player) = mpris_player {
-                        let players = match mpris_player_finder.find_all() {
-                            Ok(players) => players,
-                            Err(e) => {
-                                log::error!("Failed to get MPRIS player list {e}");
-                                continue;
-                            }
-                        };
-                        for p in players {
-                            let name = p.identity();
-                            if name == player.as_str() {
-                                current_player = Some(p);
-                                break;
-                            }
-                        }
+                    // update local map, it should be without clear() because we drain it in the
+                    // end
+                    player_set.extend(players.into_iter().map(|p| (p.bus_name().to_string(), p)));
+
+                    // update global player name set
+                    {
+                        let mut lock = global::get().players_list.lock().unwrap();
+                        lock.clear();
+                        lock.extend(player_set.keys().cloned());
                     }
 
-                    if let Some(meta) = current_player.as_ref().and_then(|p| p.get_metadata().ok())
-                    {
+                    // for each player, store informations in global memory
+                    for (name, mut player) in player_set.drain() {
+                        player.set_dbus_timeout_ms(10 * 1000);
+                        let Ok(meta) = player.get_metadata() else { log::warn!("player {name} timed out"); continue };
                         {
-                            let mut metadata = GLOBAL_CTX.track_metadata.lock().unwrap();
-                            metadata.title = meta.title().map(Into::into);
-                            metadata.album = meta.album_name().map(Into::into);
-                            metadata.artists = meta.artists().cloned();
-                        }
+                            let mut lock = global::get().track_metadata.lock().unwrap();
 
-                        thread::sleep(Duration::from_secs(5));
+                            let entry = lock.entry(name).or_insert(TrackMetadata::default());
+                            entry.title = meta.title().map(ToString::to_string);
+                            entry.album = meta.album_name().map(ToString::to_string);
+                            entry.artists = meta.artists().cloned();
+                        }
                     }
                 }
             })

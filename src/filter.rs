@@ -12,17 +12,21 @@ use obs_wrapper::{
 };
 use serde_json::json;
 
-use crate::{global::GLOBAL_CTX, properties::add_common_properties};
+use crate::{
+    global::{self, TrackMetadata},
+    properties::add_common_properties,
+};
 
 pub struct MprisTextFilter {
     context: SourceContext,
+    traced_player_id: String,
     parent: Option<SourceContext>,
     update_timer: f32,
 }
 
 impl MprisTextFilter {
     fn update_from_data(&mut self, data: &DataObj) {
-        let _ = GLOBAL_CTX
+        let _ = global::get()
             .template_engine
             .lock()
             .unwrap()
@@ -34,7 +38,12 @@ impl MprisTextFilter {
                     .unwrap_or(""),
             );
 
-        *GLOBAL_CTX.mpris_player.lock().unwrap() = data.get("mpris_device");
+        self.traced_player_id = data
+            .get::<ObsString>("mpris_device")
+            .as_ref()
+            .map(ObsString::as_str)
+            .unwrap_or("")
+            .to_string();
     }
 }
 
@@ -49,6 +58,7 @@ impl Sourceable for MprisTextFilter {
 
     fn create(create: &mut CreatableSourceContext<Self>, context: SourceContext) -> Self {
         let mut ret = Self {
+            traced_player_id: "".to_string(),
             context,
             parent: None,
             update_timer: 0.0,
@@ -83,13 +93,20 @@ impl VideoRenderSource for MprisTextFilter {
                 SourceContext::from_raw(parent_ptr)
             });
 
-            let text = GLOBAL_CTX
+            let default_env: TrackMetadata = Default::default();
+            let text = global::get()
                 .template_engine
                 .lock()
                 .unwrap()
                 .render(
                     self.context.name().unwrap(),
-                    &*GLOBAL_CTX.track_metadata.lock().unwrap(),
+                    global::get()
+                        .track_metadata
+                        .lock()
+                        .ok()
+                        .as_ref()
+                        .and_then(|lock| lock.get(&self.traced_player_id))
+                        .unwrap_or(&default_env),
                 )
                 .unwrap_or_else(|e| e.to_string());
 
