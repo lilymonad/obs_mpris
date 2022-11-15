@@ -1,5 +1,7 @@
 # How to install
 
+## Linux
+
 Locate your OBS plugin folder, then run those commands in the project folder (e.g. `~/.config/obs-studio`):
 
 ```
@@ -10,8 +12,14 @@ cp -f target/release/libobs_mpris.so <obs_plugin_folder>/plugins/obs_mpris/bin/6
 
 # How to use
 
-Create a Text source and a MPRIS source on your scene. Then setup the MPRIS source to setup its target Text source and the monitored player.
+This plugin provides you with a video source (MPRIS) and a video filter (Mpris Text Filter).
+Both of them work by modifying a target text source's text with a configurable template.
 
-# TODO
+## MPRIS
 
-- Give the list of MPRIS players instead of letting the user type anything in the player property field
+Add a text source (prefer unicode sources like [Pango](https://github.com/kkartaltepe/obs-text-pango)), then a MPRIS source to the scene.
+Target the text source in the MPRIS source properties, and choose the player to monitor. Once it's done, your text should always display the test you put in your MPRIS source template.
+
+## Mpris Text Filter
+
+Add a text source, then add a Mpris Text Filter to it. The only difference with the video source version is the target text is the one the filter is attached to.
