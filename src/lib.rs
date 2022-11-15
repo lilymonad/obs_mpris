@@ -1,6 +1,6 @@
-#![feature(once_cell)]
+#![feature(once_cell, thread_spawn_unchecked)]
 use std::{
-    sync::atomic::Ordering,
+    sync::atomic::{AtomicBool, Ordering},
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -26,6 +26,7 @@ struct MprisModule {
     /// The thread launched when the module is loaded.
     /// We need it to make MPRIS calls non-blocking
     mpris_thread: Option<JoinHandle<()>>,
+    thread_running: AtomicBool,
 }
 
 /// Implementing Module allow us to register MprisModule as an OBS module
@@ -34,6 +35,7 @@ impl Module for MprisModule {
         Self {
             context,
             mpris_thread: None,
+            thread_running: AtomicBool::new(true),
         }
     }
 
@@ -44,42 +46,48 @@ impl Module for MprisModule {
     fn load(&mut self, load_context: &mut LoadContext) -> bool {
         let _ = Logger::new().init();
 
-        let mpris_thread = thread::spawn(|| {
-            let mpris_player_finder = PlayerFinder::new().unwrap();
-            let mut current_player = None;
+        // SAFETY: We can relax the thread lifetime because we join() it before destroying the
+        // module (which contains the thread handle)
+        let mpris_thread = unsafe {
+            thread::Builder::new().spawn_unchecked(|| {
+                let mpris_player_finder = PlayerFinder::new().unwrap();
+                let mut current_player = None;
 
-            while GLOBAL_CTX.running.load(Ordering::Relaxed) {
-                let mpris_player = GLOBAL_CTX.mpris_player.lock().unwrap().take();
+                while self.thread_running.load(Ordering::Relaxed) {
+                    let mpris_player = GLOBAL_CTX.mpris_player.lock().unwrap().take();
 
-                if let Some(player) = mpris_player {
-                    let players = match mpris_player_finder.find_all() {
-                        Ok(players) => players,
-                        Err(e) => {
-                            log::error!("Failed to get MPRIS player list {e}");
-                            continue;
-                        }
-                    };
-                    for p in players {
-                        let name = p.identity();
-                        if name == player.as_str() {
-                            current_player = Some(p);
-                            break;
+                    if let Some(player) = mpris_player {
+                        let players = match mpris_player_finder.find_all() {
+                            Ok(players) => players,
+                            Err(e) => {
+                                log::error!("Failed to get MPRIS player list {e}");
+                                continue;
+                            }
+                        };
+                        for p in players {
+                            let name = p.identity();
+                            if name == player.as_str() {
+                                current_player = Some(p);
+                                break;
+                            }
                         }
                     }
-                }
 
-                if let Some(meta) = current_player.as_ref().and_then(|p| p.get_metadata().ok()) {
+                    if let Some(meta) = current_player.as_ref().and_then(|p| p.get_metadata().ok())
                     {
-                        let mut metadata = GLOBAL_CTX.track_metadata.lock().unwrap();
-                        metadata.title = meta.title().map(Into::into);
-                        metadata.album = meta.album_name().map(Into::into);
-                        metadata.artists = meta.artists().cloned();
-                    }
+                        {
+                            let mut metadata = GLOBAL_CTX.track_metadata.lock().unwrap();
+                            metadata.title = meta.title().map(Into::into);
+                            metadata.album = meta.album_name().map(Into::into);
+                            metadata.artists = meta.artists().cloned();
+                        }
 
-                    thread::sleep(Duration::from_secs(5));
+                        thread::sleep(Duration::from_secs(5));
+                    }
                 }
-            }
-        });
+            })
+        }
+        .unwrap();
 
         self.mpris_thread = Some(mpris_thread);
 
@@ -119,7 +127,7 @@ impl Module for MprisModule {
     }
 
     fn unload(&mut self) {
-        GLOBAL_CTX.running.store(false, Ordering::Relaxed);
+        self.thread_running.store(false, Ordering::Relaxed);
         let _ = self.mpris_thread.take().unwrap().join();
     }
 }
