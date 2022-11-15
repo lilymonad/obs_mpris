@@ -3,6 +3,7 @@ use obs_wrapper::{
     graphics::{GraphicsAllowDirectRendering, GraphicsColorFormat, GraphicsEffect},
     obs_string,
     prelude::DataObj,
+    properties::Properties,
     source::{
         CreatableSourceContext, GetNameSource, GetPropertiesSource, SourceContext, SourceType,
         Sourceable, UpdateSource, VideoRenderSource, VideoTickSource,
@@ -11,7 +12,7 @@ use obs_wrapper::{
 };
 use serde_json::json;
 
-use crate::{global::GLOBAL_CTX, properties::mpris_info_source_properties};
+use crate::{global::GLOBAL_CTX, properties::add_common_properties};
 
 pub struct MprisTextFilter {
     context: SourceContext,
@@ -120,7 +121,9 @@ impl VideoRenderSource for MprisTextFilter {
 
 impl GetPropertiesSource for MprisTextFilter {
     fn get_properties(&mut self) -> obs_wrapper::properties::Properties {
-        mpris_info_source_properties()
+        let mut props = Properties::new();
+        add_common_properties(&mut props);
+        props
     }
 }
 

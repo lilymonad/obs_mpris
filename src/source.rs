@@ -1,8 +1,12 @@
-use crate::{global::GLOBAL_CTX, properties::mpris_info_source_properties};
+use crate::{
+    global::GLOBAL_CTX,
+    properties::{add_common_properties, add_list_of_text_props},
+};
 use obs_sys::obs_get_source_by_name;
 use obs_wrapper::{
     obs_string,
     prelude::DataObj,
+    properties::Properties,
     source::{
         CreatableSourceContext, GetNameSource, GetPropertiesSource, GlobalContext, SourceContext,
         SourceType, Sourceable, UpdateSource, VideoTickSource,
@@ -154,6 +158,9 @@ impl UpdateSource for MprisSource {
 /// properties)
 impl GetPropertiesSource for MprisSource {
     fn get_properties(&mut self) -> obs_wrapper::properties::Properties {
-        mpris_info_source_properties()
+        let mut props = Properties::new();
+        add_list_of_text_props(&mut props);
+        add_common_properties(&mut props);
+        props
     }
 }
