@@ -23,3 +23,10 @@ Target the text source in the MPRIS source properties, and choose the player to 
 ## Mpris Text Filter
 
 Add a text source, then add a Mpris Text Filter to it. The only difference with the video source version is the target text is the one the filter is attached to.
+
+## Templates
+
+This plugin uses [Handlebars](https://docs.rs/handlebars/latest/handlebars/) for its templating.
+The variables `{{title}}`, `{{artists}}` and `{{album}}` are available. Furthermore, you may invoke built-in helpers such as `{{#each foo}}{{/each}}`.
+
+An example template to show all artists comma-delimited with the track name would be `{{#each artists}}{{this}}{{#unless @last}}, {{/unless}}{{/each}} - {{title}}`.
