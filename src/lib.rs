@@ -1,4 +1,4 @@
-#![feature(once_cell, thread_spawn_unchecked, exclusive_wrapper)]
+#![feature(once_cell, thread_spawn_unchecked, exclusive_wrapper, lazy_cell)]
 use std::{
     collections::HashMap,
     sync::atomic::{AtomicBool, Ordering},
