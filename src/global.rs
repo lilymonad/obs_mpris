@@ -32,10 +32,6 @@ pub struct GlobalCtx<'a> {
     pub(crate) template_engine: Mutex<Handlebars<'a>>,
 }
 
-/// Wrap the contxt into a LazyLock to create it dynamically (we cannot do differently because the
-/// structure uses Mutex
-static GLOBAL_CTX: LazyLock<GlobalCtx<'static>> = LazyLock::new(self::init);
-
 pub fn init<'a>() -> GlobalCtx<'a> {
     let mut template_engine = Handlebars::new();
     template_engine.register_escape_fn(no_escape);
@@ -48,5 +44,9 @@ pub fn init<'a>() -> GlobalCtx<'a> {
 }
 
 pub fn get() -> &'static GlobalCtx<'static> {
+    /// Wrap the contxt into a LazyLock to create it dynamically (we cannot do differently because the
+    /// structure uses Mutex
+    static GLOBAL_CTX: LazyLock<GlobalCtx<'static>> = LazyLock::new(self::init);
+
     &*GLOBAL_CTX
 }
